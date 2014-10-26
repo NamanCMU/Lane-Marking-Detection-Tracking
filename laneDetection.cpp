@@ -88,13 +88,21 @@ void laneDetection::LMFiltering(Mat src){
 
 	// Thresholding
 	threshold(_detectedEdges,_detectedEdges,_thres,255,0);
+	
+	// Averaging over last 5 frames
+	averageFrames.push_back(_detectedEdges);
+	if (averageFrames.size() > 5) averageFrames.erase(averageFrames.begin());
+	for (int c = 0;c < averageFrames.size() - 1; c++)
+		_detectedEdges += averageFrames[c];
+	_detectedEdges /= (1.0* averageFrames.size());
+	//
 
 	visualize();
 }
 //////////
 
 // Performing Hough Transform
-void laneDetection::houghTransform(){
+Mat laneDetection::houghTransform(){
 
 	Mat _detectedEdgesRGB;
 	cvtColor(_detectedEdges,_detectedEdgesRGB, CV_GRAY2BGR);
@@ -103,7 +111,7 @@ void laneDetection::houghTransform(){
 	for (int i = 0;i < _lines.size();i++){
 		float r = _lines[i][0];
 		float t = _lines[i][1];
-
+		
 		float x = r*cos(t);
 		float y = r*sin(t);
 
@@ -112,13 +120,85 @@ void laneDetection::houghTransform(){
 
 		clipLine(_detectedEdges.size(),p1,p2);
 
-		
 		line(_detectedEdgesRGB,p1,p2,Scalar(0,0,255),2);
 
 	}
-	imwrite("test.png",_detectedEdgesRGB);
-	cout << _lines.size() << endl;
+	return _detectedEdges;
+	// RANSAC();
 }
+
+///// RANSAC to remove Outliers and improve the estimate of the Vanishing Point
+// and hence the Lane Markings
+void laneDetection::RANSAC(){
+	
+	int minInliers = 0,num = 0;
+	for (int i = 0;i < _lines.size(); i++){
+		float x1 = _lines[i][0] * cos(_lines[i][1]);
+		float y1 = _lines[i][0] * sin(_lines[i][1]);
+
+		Point p11(cvRound(x1 - 1.0*sin(_lines[i][1])*1000), cvRound(y1 + cos(_lines[i][1])*1000));
+		Point p12(cvRound(x1 + 1.0*sin(_lines[i][1])*1000), cvRound(y1 - cos(_lines[i][1])*1000));
+
+		clipLine(_detectedEdges.size(),p11,p12);
+		
+		for (int j = i + 1;j < _lines.size(); j++){
+			float x2 = _lines[j][0] * cos(_lines[j][1]);
+			float y2 = _lines[j][0] * sin(_lines[j][1]);
+
+			Point p21(cvRound(x2 - 1.0*sin(_lines[j][1])*1000), cvRound(y2 + cos(_lines[j][1])*1000));
+			Point p22(cvRound(x2 + 1.0*sin(_lines[j][1])*1000), cvRound(y2 - cos(_lines[j][1])*1000));
+
+			clipLine(_detectedEdges.size(),p21,p22);
+
+			Point2f r;
+			intersection(p11,p12,p21,p22,r);
+			num = findInliers(r);
+			if (num >= minInliers) VP = r;
+		}
+	}
+}
+
+void laneDetection::intersection(Point2f p11, Point2f p12, Point2f p21, Point2f p22, Point2f &r){
+	Point2f x = p21 - p11;
+	Point2f vec1 = p12 - p11;
+	Point2f vec2 = p22 - p21;
+
+	float cross = vec1.x*vec2.y - vec1.y*vec2.x;
+	double t = (x.x * vec2.y - x.y * vec2.x) / cross;
+	r = p11 + vec1 * t;
+}
+
+int laneDetection::findInliers(Point2f rOrig){
+
+	int num = 0;
+	for (int i = 0;i < _lines.size(); i++){
+		float x1 = _lines[i][0] * cos(_lines[i][1]);
+		float y1 = _lines[i][0] * sin(_lines[i][1]);
+
+		Point p11(cvRound(x1 - 1.0*sin(_lines[i][1])*1000), cvRound(y1 + cos(_lines[i][1])*1000));
+		Point p12(cvRound(x1 + 1.0*sin(_lines[i][1])*1000), cvRound(y1 - cos(_lines[i][1])*1000));
+
+		clipLine(_detectedEdges.size(),p11,p12);
+		
+		for (int j = i + 1;j < _lines.size(); j++){
+			float x2 = _lines[j][0] * cos(_lines[j][1]);
+			float y2 = _lines[j][0] * sin(_lines[j][1]);
+
+			Point p21(cvRound(x2 - 1.0*sin(_lines[j][1])*1000), cvRound(y2 + cos(_lines[j][1])*1000));
+			Point p22(cvRound(x2 + 1.0*sin(_lines[j][1])*1000), cvRound(y2 - cos(_lines[j][1])*1000));
+
+			clipLine(_detectedEdges.size(),p21,p22);
+
+			Point2f r;
+			intersection(p11,p12,p21,p22,r);
+			int dist = sqrt((r.x - rOrig.x)*(r.x - rOrig.x) + (r.y - rOrig.y)*(r.y - rOrig.y));
+			if (dist < 20) num++;
+		}
+	}
+	return num;
+
+}
+/////
 
 // Visualize
 void laneDetection::visualize(){
@@ -131,16 +211,87 @@ void laneDetection::visualize(){
 
 }
 
+void laneDetection::KF(Mat im1, Mat im2){
+
+	vector<KalmanFilter> kk;
+	resize(im1,im1,Size(_width,_height));
+	resize(im2,im2,Size(_width,_height));
+	
+	KalmanFilter KF(4,2,0);
+	Mat_<float> state(4,1);
+	Mat_<float> measurement(2,1);
+	measurement.setTo(Scalar(0));
+
+	KF.transitionMatrix = *(Mat_<float>(4,4) << 1,0,1,0,  0,1,0,1,  0,0,1,0,  0,0,0,1);
+
+	KF.statePre.at<float>(0) = 100;
+	KF.statePre.at<float>(1) = 100;
+	KF.statePre.at<float>(2) = 0;
+	KF.statePre.at<float>(3) = 0;
+
+	setIdentity(KF.measurementMatrix);
+	setIdentity(KF.processNoiseCov, Scalar::all(1e-4));
+	setIdentity(KF.measurementNoiseCov, Scalar::all(1e-1));
+	setIdentity(KF.errorCovPost, Scalar::all(1));
+
+
+	while(1){
+		Mat prediction = KF.predict();
+		Point predictedPoint(prediction.at<float>(0), prediction.at<float>(1));
+
+		// Getting the next measurement using Optical Flow
+		vector<Point2f> prevPoints, nextPoints;
+		vector<uchar> status;
+		vector<float> err;
+		prevPoints.push_back(Point(100,100));
+		
+		calcOpticalFlowPyrLK(im1,im2,prevPoints,nextPoints,status,err);
+		measurement(0) = nextPoints[0].x;
+		measurement(1) = nextPoints[0].y;
+		//
+
+		// The update phase
+ 		Mat estimated = KF.correct(measurement);
+ 		
+ 		Point statePoint(estimated.at<float>(0),estimated.at<float>(1));
+ 		Point measurementPoint(measurement(0),measurement(1));
+
+ 		cout << "M: " << measurementPoint << " S: " << statePoint << endl;
+		
+ 		circle(im2,statePoint,2,Scalar(0,0,255),-1);
+ 		circle(im1,Point(100,100),2,Scalar(0,0,255),-1);
+ 		imshow("Original",im1);
+ 		imshow("Kalman",im2);
+
+ 		waitKey(100000);
+
+	}
+
+	
+
+}
+
 #ifdef LaneTest
 int main()
 {
-	Mat img = imread("img.png",0); // Read the image
-	
 	laneDetection detect; // Make the object
-	detect.LMFiltering(img); // Filtering to detect Lane Markings
-	// detect.findCannyEdges(img);
-	detect.houghTransform(); // Hough Transform
+	
+	int i = 1;
+	char ipname[10], opname[10];
+	Mat img1 = imread("./images/mono6.png");
+	Mat img2 = imread("./images/mono7.png");
 
-	waitKey(100000);
+	detect.KF(img1,img2);
+	// while(i <= 674){
+	// 	sprintf(ipname,"./images/mono%d.png",i);
+	// 	Mat img = imread(ipname,0); // Read the image
+	// 	detect.LMFiltering(img); // Filtering to detect Lane Markings
+	// 	Mat opImg = detect.houghTransform(); // Hough Transform
+		
+	// 	sprintf(opname,"./output/mono%d.png",i);
+	// 	imwrite(opname,opImg);
+	// 	i++;
+	// 	waitKey(100);
+	// }
 }
 #endif

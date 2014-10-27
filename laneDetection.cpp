@@ -1,5 +1,6 @@
 #include <iostream>
 #include "laneDetection.h"
+#include "CKalmanFilter.h"
 
 using namespace cv;
 
@@ -58,15 +59,13 @@ void laneDetection::LMFiltering(Mat src){
 	}
 	src.copyTo(_img,_mask);
 	/////
-
-	resize(_img,_img,Size(_width,_height)); // Resizing the image
 	
 	_detectedEdges = Mat(_img.size(),CV_8UC1); // detectedEdges
 	_detectedEdges.setTo(0);
 
 	int val = 0;
 	// iterating through each row
-	for (int j = 0;j<_img.rows;j++){
+	for (int j = _img.rows/2;j<_img.rows;j++){
 		unsigned char *imgptr = _img.ptr<uchar>(j);
 		unsigned char *detEdgesptr = _detectedEdges.ptr<uchar>(j);
 
@@ -90,11 +89,11 @@ void laneDetection::LMFiltering(Mat src){
 	threshold(_detectedEdges,_detectedEdges,_thres,255,0);
 	
 	// Averaging over last 5 frames
-	averageFrames.push_back(_detectedEdges);
-	if (averageFrames.size() > 5) averageFrames.erase(averageFrames.begin());
-	for (int c = 0;c < averageFrames.size() - 1; c++)
-		_detectedEdges += averageFrames[c];
-	_detectedEdges /= (1.0* averageFrames.size());
+	// averageFrames.push_back(_detectedEdges);
+	// if (averageFrames.size() > 5) averageFrames.erase(averageFrames.begin());
+	// for (int c = 0;c < averageFrames.size() - 1; c++)
+	// 	_detectedEdges += averageFrames[c];
+	// _detectedEdges /= (1.0* averageFrames.size());
 	//
 
 	visualize();
@@ -102,29 +101,39 @@ void laneDetection::LMFiltering(Mat src){
 //////////
 
 // Performing Hough Transform
-Mat laneDetection::houghTransform(){
+vector<Vec2f> laneDetection::houghTransform(){
 
 	Mat _detectedEdgesRGB;
 	cvtColor(_detectedEdges,_detectedEdgesRGB, CV_GRAY2BGR);
 	HoughLines(_detectedEdges,_lines,_rho,_theta,_houghThres);
+	vector<Vec2f> retVar;
 	
-	for (int i = 0;i < _lines.size();i++){
-		float r = _lines[i][0];
-		float t = _lines[i][1];
+	if (_lines.size() > 1){
+		Mat labels,centers;
+		Mat samples = Mat(_lines.size(),2,CV_32F);
+
+		for (int i = 0;i < _lines.size();i++){
+			samples.at<float>(i,0) = _lines[i][0];
+			samples.at<float>(i,1) = _lines[i][1];
+		}
+
+		kmeans(samples, 2, labels, TermCriteria(CV_TERMCRIT_ITER|CV_TERMCRIT_EPS, 1000, 0.001), 5, KMEANS_PP_CENTERS, centers );
+		_lines.clear();
+		float d = sqrt((centers.at<float>(0,0) - centers.at<float>(1,0))*(centers.at<float>(0,0) - centers.at<float>(1,0))
+					+ (centers.at<float>(0,1) - centers.at<float>(1,1))*(centers.at<float>(0,1) - centers.at<float>(1,1)));
+		cout << "D: " << d << "  ";
+		if (d < 100.0) return retVar;
+
+		_lines.push_back(Vec2f(centers.at<float>(0,0),centers.at<float>(0,1)));
+		_lines.push_back(Vec2f(centers.at<float>(1,0),centers.at<float>(1,1)));
 		
-		float x = r*cos(t);
-		float y = r*sin(t);
-
-		Point p1(cvRound(x - 1.0*sin(t)*1000), cvRound(y + cos(t)*1000));
-		Point p2(cvRound(x + 1.0*sin(t)*1000), cvRound(y - cos(t)*1000));
-
-		clipLine(_detectedEdges.size(),p1,p2);
-
-		line(_detectedEdgesRGB,p1,p2,Scalar(0,0,255),2);
-
+		// cout << centers.at<float>(0,0) << " " << centers.at<float>(0,1) << endl;
+		// cout << centers.at<float>(1,0) << " " << centers.at<float>(1,1) << endl;
+		
 	}
-	return _detectedEdges;
-	// RANSAC();
+
+
+	return _lines;
 }
 
 ///// RANSAC to remove Outliers and improve the estimate of the Vanishing Point
@@ -211,64 +220,28 @@ void laneDetection::visualize(){
 
 }
 
-void laneDetection::KF(Mat im1, Mat im2){
+Mat laneDetection::drawLines(Mat img, vector<Vec2f> lines){
 
-	vector<KalmanFilter> kk;
-	resize(im1,im1,Size(_width,_height));
-	resize(im2,im2,Size(_width,_height));
-	
-	KalmanFilter KF(4,2,0);
-	Mat_<float> state(4,1);
-	Mat_<float> measurement(2,1);
-	measurement.setTo(Scalar(0));
+	Mat imgRGB;
+	cvtColor(img,imgRGB,CV_GRAY2RGB);
 
-	KF.transitionMatrix = *(Mat_<float>(4,4) << 1,0,1,0,  0,1,0,1,  0,0,1,0,  0,0,0,1);
-
-	KF.statePre.at<float>(0) = 100;
-	KF.statePre.at<float>(1) = 100;
-	KF.statePre.at<float>(2) = 0;
-	KF.statePre.at<float>(3) = 0;
-
-	setIdentity(KF.measurementMatrix);
-	setIdentity(KF.processNoiseCov, Scalar::all(1e-4));
-	setIdentity(KF.measurementNoiseCov, Scalar::all(1e-1));
-	setIdentity(KF.errorCovPost, Scalar::all(1));
-
-
-	while(1){
-		Mat prediction = KF.predict();
-		Point predictedPoint(prediction.at<float>(0), prediction.at<float>(1));
-
-		// Getting the next measurement using Optical Flow
-		vector<Point2f> prevPoints, nextPoints;
-		vector<uchar> status;
-		vector<float> err;
-		prevPoints.push_back(Point(100,100));
+	for (int i = 0;i < lines.size();i++){
+		float r = lines[i][0];
+		float t = lines[i][1];
 		
-		calcOpticalFlowPyrLK(im1,im2,prevPoints,nextPoints,status,err);
-		measurement(0) = nextPoints[0].x;
-		measurement(1) = nextPoints[0].y;
-		//
+		float x = r*cos(t);
+		float y = r*sin(t);
 
-		// The update phase
- 		Mat estimated = KF.correct(measurement);
- 		
- 		Point statePoint(estimated.at<float>(0),estimated.at<float>(1));
- 		Point measurementPoint(measurement(0),measurement(1));
+		Point p1(cvRound(x - 1.0*sin(t)*1000), cvRound(y + cos(t)*1000));
+		Point p2(cvRound(x + 1.0*sin(t)*1000), cvRound(y - cos(t)*1000));
 
- 		cout << "M: " << measurementPoint << " S: " << statePoint << endl;
-		
- 		circle(im2,statePoint,2,Scalar(0,0,255),-1);
- 		circle(im1,Point(100,100),2,Scalar(0,0,255),-1);
- 		imshow("Original",im1);
- 		imshow("Kalman",im2);
+		clipLine(img.size(),p1,p2);
 
- 		waitKey(100000);
+		line(imgRGB,p1,p2,Scalar(0,0,255),2);
 
 	}
 
-	
-
+	return imgRGB;
 }
 
 #ifdef LaneTest
@@ -278,20 +251,51 @@ int main()
 	
 	int i = 1;
 	char ipname[10], opname[10];
-	Mat img1 = imread("./images/mono6.png");
-	Mat img2 = imread("./images/mono7.png");
-
-	detect.KF(img1,img2);
-	// while(i <= 674){
-	// 	sprintf(ipname,"./images/mono%d.png",i);
-	// 	Mat img = imread(ipname,0); // Read the image
-	// 	detect.LMFiltering(img); // Filtering to detect Lane Markings
-	// 	Mat opImg = detect.houghTransform(); // Hough Transform
+	
+	sprintf(ipname,"./images/mono%d.png",i);
+	Mat img1 = imread(ipname,0); // Read the image
+	resize(img1,img1,Size(detect._width,detect._height));
+	detect.LMFiltering(img1); // Filtering to detect Lane Markings
+	vector<Vec2f> lines = detect.houghTransform(); // Hough Transform
+	Mat imgFinal = detect.drawLines(img1, lines);
 		
-	// 	sprintf(opname,"./output/mono%d.png",i);
-	// 	imwrite(opname,opImg);
-	// 	i++;
-	// 	waitKey(100);
-	// }
+	i++;
+
+	while(i <= 674){
+		
+		sprintf(ipname,"./images/mono%d.png",i);
+		Mat img2 = imread(ipname,0); // Read the image
+		resize(img2,img2,Size(detect._width,detect._height));
+		i++;
+
+		detect.LMFiltering(img2); // Filtering to detect Lane Markings
+		vector<Vec2f> lines2 = detect.houghTransform(); // Hough Transform
+
+		if (lines2.size() < 2) {
+			imgFinal = detect.drawLines(img2,lines);
+			sprintf(opname,"./output/mono%d.png",i - 1);
+			imwrite(opname,imgFinal); // Read the image
+			continue;
+		}
+
+		CKalmanFilter KF2(lines);
+		vector<Vec2f> pp = KF2.predict();
+
+		vector<Vec2f> lines2Final = KF2.update(lines2);
+		lines = lines2Final;
+		imgFinal = detect.drawLines(img2,lines);
+		cout << "I: " << i << endl;
+		cout << "----------" << endl;
+		sprintf(opname,"./output/mono%d.png",i - 1);
+		imwrite(opname,imgFinal); // Read the image
+
+		// // cout << pp[0][0] << "   "  << pp[0][1] << "    " << pp[1][0] << "   " << pp[1][1] <<  "   I: " << i << endl;
+		// // cout << lines[0][0] << "   " << lines[0][1] << "    " << lines[1][0] << "    " << lines[1][1] << endl;
+		// // cout << "--------------------------" << endl;
+
+		waitKey(100);
+	}
+	
+
 }
 #endif

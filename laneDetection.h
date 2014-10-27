@@ -17,20 +17,21 @@ public:
 	~laneDetection();
 	void findCannyEdges(Mat);
 	void LMFiltering(Mat);
-	Mat houghTransform();
+	vector<Vec2f> houghTransform();
 	void RANSAC();
-	void KF(Mat, Mat);
+	Mat drawLines(Mat,vector<Vec2f>);
 	Mat _detectedEdges;
+	int _width, _height;
 
 
 protected:
+
 	void intersection(Point2f, Point2f, Point2f, Point2f, Point2f&);
 	int findInliers(Point2f);
 	void visualize();
 	int kernelSize;
 	int lowThreshold;
 	int ratio;
-	int _width, _height;
 	int _LMWidth; // Lane Mark Width
 	int _thres;
 	Mat _img;

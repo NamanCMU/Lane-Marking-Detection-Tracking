@@ -51,9 +51,15 @@ vector<Vec2f> CKalmanFilter::update(vector<Vec2f> measure){
 	Mat estimated = kalman->correct(measurement);	
 		
 	// Point statePoint(estimated.at<float>(0),estimated.at<float>(1),estimated.at<float>(2),estimated.at<float>(3));
-		
-	measure[0][0] = estimated.at<float>(0);measure[0][1] = estimated.at<float>(1);
-	measure[1][0] = estimated.at<float>(2);measure[1][1] = estimated.at<float>(3);
+	if(estimated.at<float>(0) < estimated.at<float>(2)){
+		measure[0][0] = estimated.at<float>(0);measure[0][1] = estimated.at<float>(1);
+		measure[1][0] = estimated.at<float>(2);measure[1][1] = estimated.at<float>(3);
+	}
+	else{
+		measure[0][0] = estimated.at<float>(2);measure[0][1] = estimated.at<float>(3);
+		measure[1][0] = estimated.at<float>(0);measure[1][1] = estimated.at<float>(1);
+	}
+
 	
 	return measure;
 	waitKey(1);

@@ -36,9 +36,8 @@ void laneDetection::findCannyEdges(Mat img){
 	img.copyTo(_img,_mask);
 	/////
 
-	resize(_img,_img,Size(_width,_height)); // resizing to half (only so that image fits on the screen)
 	Canny(_img,_detectedEdges,lowThreshold,lowThreshold*ratio,kernelSize); // Canny Edge Detector
-	
+
 	visualize();
 }
 //
@@ -87,14 +86,6 @@ void laneDetection::LMFiltering(Mat src){
 
 	// Thresholding
 	threshold(_detectedEdges,_detectedEdges,_thres,255,0);
-	
-	// Averaging over last 5 frames
-	// averageFrames.push_back(_detectedEdges);
-	// if (averageFrames.size() > 5) averageFrames.erase(averageFrames.begin());
-	// for (int c = 0;c < averageFrames.size() - 1; c++)
-	// 	_detectedEdges += averageFrames[c];
-	// _detectedEdges /= (1.0* averageFrames.size());
-	//
 
 	visualize();
 }
@@ -107,7 +98,7 @@ vector<Vec2f> laneDetection::houghTransform(){
 	cvtColor(_detectedEdges,_detectedEdgesRGB, CV_GRAY2BGR);
 	HoughLines(_detectedEdges,_lines,_rho,_theta,_houghThres);
 	vector<Vec2f> retVar;
-	
+
 	if (_lines.size() > 1){
 		Mat labels,centers;
 		Mat samples = Mat(_lines.size(),2,CV_32F);
@@ -116,19 +107,21 @@ vector<Vec2f> laneDetection::houghTransform(){
 			samples.at<float>(i,0) = _lines[i][0];
 			samples.at<float>(i,1) = _lines[i][1];
 		}
-
+		// K means to get two lines
 		kmeans(samples, 2, labels, TermCriteria(CV_TERMCRIT_ITER|CV_TERMCRIT_EPS, 1000, 0.001), 5, KMEANS_PP_CENTERS, centers );
 		_lines.clear();
+
+		// Removing bad lines
 		float d = sqrt((centers.at<float>(0,0) - centers.at<float>(1,0))*(centers.at<float>(0,0) - centers.at<float>(1,0))
 					+ (centers.at<float>(0,1) - centers.at<float>(1,1))*(centers.at<float>(0,1) - centers.at<float>(1,1)));
-		cout << "D: " << d << "  ";
-		if (d < 100.0) return retVar;
+		bool check = (((centers.at<float>(0,1) * 180.0 / CV_PI) < 100 && (centers.at<float>(0,1) * 180.0 / CV_PI) > 70)
+					|| ((centers.at<float>(1,1) * 180.0 / CV_PI) < 100 && (centers.at<float>(1,1) * 180.0 / CV_PI) > 70));
+
+		if (d < 100.0 || (float)(cos(centers.at<float>(0,1)) * cos(centers.at<float>(1,1)) >= 0) || check) return retVar;
+		//
 
 		_lines.push_back(Vec2f(centers.at<float>(0,0),centers.at<float>(0,1)));
 		_lines.push_back(Vec2f(centers.at<float>(1,0),centers.at<float>(1,1)));
-		
-		// cout << centers.at<float>(0,0) << " " << centers.at<float>(0,1) << endl;
-		// cout << centers.at<float>(1,0) << " " << centers.at<float>(1,1) << endl;
 		
 	}
 
@@ -212,14 +205,15 @@ int laneDetection::findInliers(Point2f rOrig){
 // Visualize
 void laneDetection::visualize(){
 	
-	namedWindow("Canny");
+	namedWindow("Filter");
 	namedWindow("Original");
 
-	imshow("Canny",_detectedEdges); // Detected Edges
+	imshow("Filter",_detectedEdges); // Detected Edges
 	imshow("Original",_img); // Original Image
 
 }
 
+// Draw Lines on the image
 Mat laneDetection::drawLines(Mat img, vector<Vec2f> lines){
 
 	Mat imgRGB;
@@ -257,9 +251,12 @@ int main()
 	resize(img1,img1,Size(detect._width,detect._height));
 	detect.LMFiltering(img1); // Filtering to detect Lane Markings
 	vector<Vec2f> lines = detect.houghTransform(); // Hough Transform
+	
 	Mat imgFinal = detect.drawLines(img1, lines);
-		
 	i++;
+	
+	sprintf(ipname,"./output/mono%d.png",i - 1);
+	imwrite(ipname,imgFinal); 
 
 	while(i <= 674){
 		
@@ -269,29 +266,28 @@ int main()
 		i++;
 
 		detect.LMFiltering(img2); // Filtering to detect Lane Markings
+		
 		vector<Vec2f> lines2 = detect.houghTransform(); // Hough Transform
-
 		if (lines2.size() < 2) {
 			imgFinal = detect.drawLines(img2,lines);
 			sprintf(opname,"./output/mono%d.png",i - 1);
-			imwrite(opname,imgFinal); // Read the image
+			imwrite(opname,imgFinal); 
 			continue;
 		}
-
+		
 		CKalmanFilter KF2(lines);
 		vector<Vec2f> pp = KF2.predict();
 
 		vector<Vec2f> lines2Final = KF2.update(lines2);
 		lines = lines2Final;
-		imgFinal = detect.drawLines(img2,lines);
-		cout << "I: " << i << endl;
-		cout << "----------" << endl;
+		imgFinal = detect.drawLines(img2,lines2);
+		
 		sprintf(opname,"./output/mono%d.png",i - 1);
-		imwrite(opname,imgFinal); // Read the image
+		imwrite(opname,imgFinal);
 
-		// // cout << pp[0][0] << "   "  << pp[0][1] << "    " << pp[1][0] << "   " << pp[1][1] <<  "   I: " << i << endl;
-		// // cout << lines[0][0] << "   " << lines[0][1] << "    " << lines[1][0] << "    " << lines[1][1] << endl;
-		// // cout << "--------------------------" << endl;
+		// cout << pp[0][0] << "   "  << pp[0][1] << "    " << pp[1][0] << "   " << pp[1][1] <<  "   I: " << i << endl;
+		// cout << lines[0][0] << "   " << lines[0][1] << "    " << lines[1][0] << "    " << lines[1][1] << endl;
+		// cout << "--------------------------" << endl;
 
 		waitKey(100);
 	}

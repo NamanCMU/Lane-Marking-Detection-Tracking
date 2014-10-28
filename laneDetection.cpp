@@ -16,7 +16,7 @@ laneDetection::laneDetection(){
 	_thres = 40;
 	_rho = 1;
 	_theta = CV_PI/180.0;
-	_houghThres = 100;
+	_houghThres =100;
 }
 
 laneDetection::~laneDetection(){
@@ -98,7 +98,7 @@ vector<Vec2f> laneDetection::houghTransform(){
 	cvtColor(_detectedEdges,_detectedEdgesRGB, CV_GRAY2BGR);
 	HoughLines(_detectedEdges,_lines,_rho,_theta,_houghThres);
 	vector<Vec2f> retVar;
-
+	
 	if (_lines.size() > 1){
 		Mat labels,centers;
 		Mat samples = Mat(_lines.size(),2,CV_32F);
@@ -109,98 +109,72 @@ vector<Vec2f> laneDetection::houghTransform(){
 		}
 		// K means to get two lines
 		kmeans(samples, 2, labels, TermCriteria(CV_TERMCRIT_ITER|CV_TERMCRIT_EPS, 1000, 0.001), 5, KMEANS_PP_CENTERS, centers );
+
+		////////////////// Using RANSAC to get rid of outliers
 		_lines.clear();
-
-		// Removing bad lines
-		float d = sqrt((centers.at<float>(0,0) - centers.at<float>(1,0))*(centers.at<float>(0,0) - centers.at<float>(1,0))
-					+ (centers.at<float>(0,1) - centers.at<float>(1,1))*(centers.at<float>(0,1) - centers.at<float>(1,1)));
-		bool check = (((centers.at<float>(0,1) * 180.0 / CV_PI) < 100 && (centers.at<float>(0,1) * 180.0 / CV_PI) > 70)
-					|| ((centers.at<float>(1,1) * 180.0 / CV_PI) < 100 && (centers.at<float>(1,1) * 180.0 / CV_PI) > 70));
-
-		if (d < 100.0 || (float)(cos(centers.at<float>(0,1)) * cos(centers.at<float>(1,1)) >= 0) || check) return retVar;
-		//
-
-		_lines.push_back(Vec2f(centers.at<float>(0,0),centers.at<float>(0,1)));
-		_lines.push_back(Vec2f(centers.at<float>(1,0),centers.at<float>(1,1)));
 		
+		vector<Point2f> left;
+		vector<Point2f> right;
+		for(int i = 0;i < labels.rows; i++){
+			if (labels.at<int>(i) == 0) left.push_back(Point2f(samples.at<float>(i,0), samples.at<float>(i,1)));
+			else right.push_back(Point2f(samples.at<float>(i,0), samples.at<float>(i,1)));
+		}
+		vector<Point2f> leftR = ransac(left);
+		vector<Point2f> rightR = ransac(right);
+		if (leftR.size() < 2 || rightR.size() < 2) return retVar;
+		
+		////////////////
+
+		// // Removing bad lines
+		// bool check = (((centers.at<float>(0,1) * 180.0 / CV_PI) < 110 && (centers.at<float>(0,1) * 180.0 / CV_PI) > 70)
+		// 			|| ((centers.at<float>(1,1) * 180.0 / CV_PI) < 110 && (centers.at<float>(1,1) * 180.0 / CV_PI) > 70));
+
+		if ((float)(cos((leftR[0].y + leftR[1].y)/2) * cos((rightR[0].y + rightR[1].y)/2)) >= 0) return retVar;
+
+		_lines.push_back(Vec2f((leftR[0].x + leftR[1].x)/2, (leftR[0].y + leftR[1].y)/2));
+		_lines.push_back(Vec2f((rightR[0].x + rightR[1].x)/2, (rightR[0].y + rightR[1].y)/2));
+
 	}
 
 
 	return _lines;
 }
 
-///// RANSAC to remove Outliers and improve the estimate of the Vanishing Point
-// and hence the Lane Markings
-void laneDetection::RANSAC(){
-	
-	int minInliers = 0,num = 0;
-	for (int i = 0;i < _lines.size(); i++){
-		float x1 = _lines[i][0] * cos(_lines[i][1]);
-		float y1 = _lines[i][0] * sin(_lines[i][1]);
+// Implementing RANSAC to remove outlier lines
+// TO DO: Better implementation 
+vector<Point2f> laneDetection::ransac(vector<Point2f> data){
 
-		Point p11(cvRound(x1 - 1.0*sin(_lines[i][1])*1000), cvRound(y1 + cos(_lines[i][1])*1000));
-		Point p12(cvRound(x1 + 1.0*sin(_lines[i][1])*1000), cvRound(y1 - cos(_lines[i][1])*1000));
+	vector<Point2f> res;
+	int maxInliers = 0;
 
-		clipLine(_detectedEdges.size(),p11,p12);
+	for(int i = 0;i < data.size();i++){
+		Point2f p1 = data[i];
+
+		for(int j = i + 1;j < data.size();j++){
+			Point2f p2 = data[j];
+			int n = 0;
+			
+			for (int k = 0;k < data.size();k++){
+				Point2f p3 = data[k];
+				float normalLength = norm(p2 - p1);
+				float distance = abs((float)((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / normalLength);
+				if (distance < 0.01) n++;
+			}
+			
+			if (n > maxInliers) {
+				res.clear();
+				maxInliers = n;			
+				res.push_back(p1);
+				res.push_back(p2);
+			}
 		
-		for (int j = i + 1;j < _lines.size(); j++){
-			float x2 = _lines[j][0] * cos(_lines[j][1]);
-			float y2 = _lines[j][0] * sin(_lines[j][1]);
-
-			Point p21(cvRound(x2 - 1.0*sin(_lines[j][1])*1000), cvRound(y2 + cos(_lines[j][1])*1000));
-			Point p22(cvRound(x2 + 1.0*sin(_lines[j][1])*1000), cvRound(y2 - cos(_lines[j][1])*1000));
-
-			clipLine(_detectedEdges.size(),p21,p22);
-
-			Point2f r;
-			intersection(p11,p12,p21,p22,r);
-			num = findInliers(r);
-			if (num >= minInliers) VP = r;
 		}
-	}
-}
-
-void laneDetection::intersection(Point2f p11, Point2f p12, Point2f p21, Point2f p22, Point2f &r){
-	Point2f x = p21 - p11;
-	Point2f vec1 = p12 - p11;
-	Point2f vec2 = p22 - p21;
-
-	float cross = vec1.x*vec2.y - vec1.y*vec2.x;
-	double t = (x.x * vec2.y - x.y * vec2.x) / cross;
-	r = p11 + vec1 * t;
-}
-
-int laneDetection::findInliers(Point2f rOrig){
-
-	int num = 0;
-	for (int i = 0;i < _lines.size(); i++){
-		float x1 = _lines[i][0] * cos(_lines[i][1]);
-		float y1 = _lines[i][0] * sin(_lines[i][1]);
-
-		Point p11(cvRound(x1 - 1.0*sin(_lines[i][1])*1000), cvRound(y1 + cos(_lines[i][1])*1000));
-		Point p12(cvRound(x1 + 1.0*sin(_lines[i][1])*1000), cvRound(y1 - cos(_lines[i][1])*1000));
-
-		clipLine(_detectedEdges.size(),p11,p12);
 		
-		for (int j = i + 1;j < _lines.size(); j++){
-			float x2 = _lines[j][0] * cos(_lines[j][1]);
-			float y2 = _lines[j][0] * sin(_lines[j][1]);
-
-			Point p21(cvRound(x2 - 1.0*sin(_lines[j][1])*1000), cvRound(y2 + cos(_lines[j][1])*1000));
-			Point p22(cvRound(x2 + 1.0*sin(_lines[j][1])*1000), cvRound(y2 - cos(_lines[j][1])*1000));
-
-			clipLine(_detectedEdges.size(),p21,p22);
-
-			Point2f r;
-			intersection(p11,p12,p21,p22,r);
-			int dist = sqrt((r.x - rOrig.x)*(r.x - rOrig.x) + (r.y - rOrig.y)*(r.y - rOrig.y));
-			if (dist < 20) num++;
-		}
 	}
-	return num;
 
+	return res;
 }
-/////
+
 
 // Visualize
 void laneDetection::visualize(){
@@ -251,20 +225,17 @@ int main()
 	resize(img1,img1,Size(detect._width,detect._height));
 	detect.LMFiltering(img1); // Filtering to detect Lane Markings
 	vector<Vec2f> lines = detect.houghTransform(); // Hough Transform
-	
 	Mat imgFinal = detect.drawLines(img1, lines);
 	i++;
 	
 	sprintf(ipname,"./output/mono%d.png",i - 1);
 	imwrite(ipname,imgFinal); 
-
 	while(i <= 674){
 		
 		sprintf(ipname,"./images/mono%d.png",i);
 		Mat img2 = imread(ipname,0); // Read the image
 		resize(img2,img2,Size(detect._width,detect._height));
 		i++;
-
 		detect.LMFiltering(img2); // Filtering to detect Lane Markings
 		
 		vector<Vec2f> lines2 = detect.houghTransform(); // Hough Transform
@@ -284,10 +255,6 @@ int main()
 		
 		sprintf(opname,"./output/mono%d.png",i - 1);
 		imwrite(opname,imgFinal);
-
-		// cout << pp[0][0] << "   "  << pp[0][1] << "    " << pp[1][0] << "   " << pp[1][1] <<  "   I: " << i << endl;
-		// cout << lines[0][0] << "   " << lines[0][1] << "    " << lines[1][0] << "    " << lines[1][1] << endl;
-		// cout << "--------------------------" << endl;
 
 		waitKey(100);
 	}

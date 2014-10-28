@@ -23,7 +23,7 @@ CKalmanFilter::CKalmanFilter(vector<Vec2f> p){
 	setIdentity(kalman->measurementMatrix);
 	setIdentity(kalman->processNoiseCov, Scalar::all(1e-4));
 	setIdentity(kalman->measurementNoiseCov, Scalar::all(1e-1));
-	setIdentity(kalman->errorCovPost, Scalar::all(1));
+	setIdentity(kalman->errorCovPost, Scalar::all(10));
 }
 
 CKalmanFilter::~CKalmanFilter(){
@@ -60,8 +60,8 @@ vector<Vec2f> CKalmanFilter::update(vector<Vec2f> measure){
 		measure[1][0] = estimated.at<float>(0);measure[1][1] = estimated.at<float>(1);
 	}
 
+	waitKey(1);
 	
 	return measure;
-	waitKey(1);
 
 }

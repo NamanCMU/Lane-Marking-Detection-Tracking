@@ -18,16 +18,13 @@ public:
 	void findCannyEdges(Mat);
 	void LMFiltering(Mat);
 	vector<Vec2f> houghTransform();
-	void RANSAC();
 	Mat drawLines(Mat,vector<Vec2f>);
 	Mat _detectedEdges;
 	int _width, _height;
 
 
 protected:
-
-	void intersection(Point2f, Point2f, Point2f, Point2f, Point2f&);
-	int findInliers(Point2f);
+	vector<Point2f> ransac(vector<Point2f>);
 	void visualize();
 	int kernelSize;
 	int lowThreshold;

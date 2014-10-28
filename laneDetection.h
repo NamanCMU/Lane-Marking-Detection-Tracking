@@ -24,8 +24,9 @@ public:
 
 
 protected:
+	bool findIntersection(vector<Point>, Point&);
 	vector<Point2f> ransac(vector<Point2f>);
-	void visualize();
+	void visualize(Mat);
 	int kernelSize;
 	int lowThreshold;
 	int ratio;

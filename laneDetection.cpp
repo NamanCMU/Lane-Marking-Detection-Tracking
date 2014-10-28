@@ -38,7 +38,6 @@ void laneDetection::findCannyEdges(Mat img){
 
 	Canny(_img,_detectedEdges,lowThreshold,lowThreshold*ratio,kernelSize); // Canny Edge Detector
 
-	visualize();
 }
 //
 
@@ -87,7 +86,6 @@ void laneDetection::LMFiltering(Mat src){
 	// Thresholding
 	threshold(_detectedEdges,_detectedEdges,_thres,255,0);
 
-	visualize();
 }
 //////////
 
@@ -177,13 +175,11 @@ vector<Point2f> laneDetection::ransac(vector<Point2f> data){
 
 
 // Visualize
-void laneDetection::visualize(){
+void laneDetection::visualize(Mat imgRGB){
 	
-	namedWindow("Filter");
-	namedWindow("Original");
-
-	imshow("Filter",_detectedEdges); // Detected Edges
-	imshow("Original",_img); // Original Image
+	namedWindow("LaneMarkings");
+	imshow("LaneMarkings",imgRGB);
+	waitKey(100);
 
 }
 
@@ -192,6 +188,7 @@ Mat laneDetection::drawLines(Mat img, vector<Vec2f> lines){
 
 	Mat imgRGB;
 	cvtColor(img,imgRGB,CV_GRAY2RGB);
+	vector<Point> endPoints;
 
 	for (int i = 0;i < lines.size();i++){
 		float r = lines[i][0];
@@ -204,12 +201,43 @@ Mat laneDetection::drawLines(Mat img, vector<Vec2f> lines){
 		Point p2(cvRound(x + 1.0*sin(t)*1000), cvRound(y - cos(t)*1000));
 
 		clipLine(img.size(),p1,p2);
-
-		line(imgRGB,p1,p2,Scalar(0,0,255),2);
+		if (p1.y > p2.y){
+			endPoints.push_back(p1);
+			endPoints.push_back(p2);
+		}
+		else{
+			endPoints.push_back(p2);
+			endPoints.push_back(p1);
+		}
 
 	}
+	Point pint;
+	bool check = findIntersection(endPoints,pint);
 
+	if (check){
+		line(imgRGB,endPoints[0],pint,Scalar(0,0,255),2);
+		line(imgRGB,endPoints[2],pint,Scalar(0,0,255),2);
+	}	
+	visualize(imgRGB);
 	return imgRGB;
+}
+
+// Finding the Vanishing Point
+bool laneDetection::findIntersection(vector<Point> endP, Point& pi){
+
+	Point x = endP[2] - endP[0];
+	Point d1 = endP[1] - endP[0];
+	Point d2 = endP[3] - endP[2];
+	
+	float cross = d1.x*d2.y - d1.y*d2.x;
+	if (abs(cross) < 1e-8)
+        return false;
+
+    double t1 = (x.x * d2.y - x.y * d2.x)/cross;
+    pi = endP[0] + d1 * t1;
+    return true;
+
+
 }
 
 #ifdef LaneTest
@@ -237,7 +265,6 @@ int main()
 		resize(img2,img2,Size(detect._width,detect._height));
 		i++;
 		detect.LMFiltering(img2); // Filtering to detect Lane Markings
-		
 		vector<Vec2f> lines2 = detect.houghTransform(); // Hough Transform
 		if (lines2.size() < 2) {
 			imgFinal = detect.drawLines(img2,lines);
@@ -251,12 +278,11 @@ int main()
 
 		vector<Vec2f> lines2Final = KF2.update(lines2);
 		lines = lines2Final;
-		imgFinal = detect.drawLines(img2,lines2);
+		imgFinal = detect.drawLines(img2,lines);
 		
 		sprintf(opname,"./output/mono%d.png",i - 1);
 		imwrite(opname,imgFinal);
 
-		waitKey(100);
 	}
 	
 

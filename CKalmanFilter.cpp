@@ -23,7 +23,7 @@ CKalmanFilter::CKalmanFilter(vector<Vec2f> p){
 	setIdentity(kalman->measurementMatrix);
 	setIdentity(kalman->processNoiseCov, Scalar::all(1e-4));
 	setIdentity(kalman->measurementNoiseCov, Scalar::all(1e-1));
-	setIdentity(kalman->errorCovPost, Scalar::all(10));
+	setIdentity(kalman->errorCovPost, Scalar::all(5));
 }
 
 CKalmanFilter::~CKalmanFilter(){
@@ -50,7 +50,6 @@ vector<Vec2f> CKalmanFilter::update(vector<Vec2f> measure){
 	// The update phase
 	Mat estimated = kalman->correct(measurement);	
 		
-	// Point statePoint(estimated.at<float>(0),estimated.at<float>(1),estimated.at<float>(2),estimated.at<float>(3));
 	if(estimated.at<float>(0) < estimated.at<float>(2)){
 		measure[0][0] = estimated.at<float>(0);measure[0][1] = estimated.at<float>(1);
 		measure[1][0] = estimated.at<float>(2);measure[1][1] = estimated.at<float>(3);

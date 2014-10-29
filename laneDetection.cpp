@@ -1,15 +1,13 @@
 #include <iostream>
+#include <string.h>
 #include "laneDetection.h"
 #include "CKalmanFilter.h"
 
 using namespace cv;
 
 laneDetection::laneDetection(){
-	_img = Mat();
+	myfile.open ("intercepts.csv");
 	_detectedEdges = Mat();
-	kernelSize = 3;
-	lowThreshold = 75;
-	ratio = 3;
 	_width = 800;
 	_height = 600;
 	_LMWidth = 10;
@@ -17,58 +15,41 @@ laneDetection::laneDetection(){
 	_rho = 1;
 	_theta = CV_PI/180.0;
 	_houghThres =100;
+	_ransacThres = 0.01;
 }
 
 laneDetection::~laneDetection(){
 
 }
 
-// Canny Edge Detector
-void laneDetection::findCannyEdges(Mat img){
-
-	///// Generating the mask to mask the top half of the image
-	_mask = Mat(img.size(), CV_8UC1, Scalar(1));
-	for(int i = 0;i < _mask.rows/2; i++){
-		for(int j = 0;j < _mask.cols;j++){
-			_mask.at<uchar>(Point(j,i)) = 0;
-		}
-	}
-	img.copyTo(_img,_mask);
-	/////
-
-	Canny(_img,_detectedEdges,lowThreshold,lowThreshold*ratio,kernelSize); // Canny Edge Detector
-
-}
-//
-
-
 //////////
 // Filter to detect lane Markings
 // This is just one approach. Other approaches can be Edge detection, Connected Components, etc.
+// The advantage of this approach is that it will only detect the edges in the vertical direction.
 void laneDetection::LMFiltering(Mat src){
-
+	Mat img;
 	
 	///// Generating the mask to mask the top half of the image
-	_mask = Mat(src.size(), CV_8UC1, Scalar(1));
-	for(int i = 0;i < _mask.rows/2; i++){
-		for(int j = 0;j < _mask.cols;j++){
-			_mask.at<uchar>(Point(j,i)) = 0;
+	Mat mask = Mat(src.size(), CV_8UC1, Scalar(1));
+	for(int i = 0;i < mask.rows/2; i++){
+		for(int j = 0;j < mask.cols;j++){
+			mask.at<uchar>(Point(j,i)) = 0;
 		}
 	}
-	src.copyTo(_img,_mask);
+	src.copyTo(img,mask);
 	/////
 	
-	_detectedEdges = Mat(_img.size(),CV_8UC1); // detectedEdges
+	_detectedEdges = Mat(img.size(),CV_8UC1); // detectedEdges
 	_detectedEdges.setTo(0);
 
 	int val = 0;
 	// iterating through each row
-	for (int j = _img.rows/2;j<_img.rows;j++){
-		unsigned char *imgptr = _img.ptr<uchar>(j);
+	for (int j = img.rows/2;j<img.rows;j++){
+		unsigned char *imgptr = img.ptr<uchar>(j);
 		unsigned char *detEdgesptr = _detectedEdges.ptr<uchar>(j);
 
 		// iterating through each column seeing the difference among columns which are "width" apart
-		for (int i = _LMWidth;i < _img.cols - _LMWidth; ++i){
+		for (int i = _LMWidth;i < img.cols - _LMWidth; ++i){
 			if(imgptr[i]!= 0){
 				val = 2*imgptr[i];
 				val += -imgptr[i - _LMWidth];
@@ -93,8 +74,8 @@ void laneDetection::LMFiltering(Mat src){
 vector<Vec2f> laneDetection::houghTransform(){
 
 	Mat _detectedEdgesRGB;
-	cvtColor(_detectedEdges,_detectedEdgesRGB, CV_GRAY2BGR);
-	HoughLines(_detectedEdges,_lines,_rho,_theta,_houghThres);
+	cvtColor(_detectedEdges,_detectedEdgesRGB, CV_GRAY2BGR); // converting to RGB
+	HoughLines(_detectedEdges,_lines,_rho,_theta,_houghThres); // Finding the hough lines
 	vector<Vec2f> retVar;
 	
 	if (_lines.size() > 1){
@@ -105,7 +86,7 @@ vector<Vec2f> laneDetection::houghTransform(){
 			samples.at<float>(i,0) = _lines[i][0];
 			samples.at<float>(i,1) = _lines[i][1];
 		}
-		// K means to get two lines
+		// K means clustering to get two lines
 		kmeans(samples, 2, labels, TermCriteria(CV_TERMCRIT_ITER|CV_TERMCRIT_EPS, 1000, 0.001), 5, KMEANS_PP_CENTERS, centers );
 
 		////////////////// Using RANSAC to get rid of outliers
@@ -117,18 +98,15 @@ vector<Vec2f> laneDetection::houghTransform(){
 			if (labels.at<int>(i) == 0) left.push_back(Point2f(samples.at<float>(i,0), samples.at<float>(i,1)));
 			else right.push_back(Point2f(samples.at<float>(i,0), samples.at<float>(i,1)));
 		}
-		vector<Point2f> leftR = ransac(left);
+		// Performing Ransac
+		vector<Point2f> leftR = ransac(left); 
 		vector<Point2f> rightR = ransac(right);
-		if (leftR.size() < 2 || rightR.size() < 2) return retVar;
-		
-		////////////////
+		//////////////////
 
-		// // Removing bad lines
-		// bool check = (((centers.at<float>(0,1) * 180.0 / CV_PI) < 110 && (centers.at<float>(0,1) * 180.0 / CV_PI) > 70)
-		// 			|| ((centers.at<float>(1,1) * 180.0 / CV_PI) < 110 && (centers.at<float>(1,1) * 180.0 / CV_PI) > 70));
+		if (leftR.size() < 1 || rightR.size() < 1 || 
+		   (float)(cos((leftR[0].y + leftR[1].y)/2) * cos((rightR[0].y + rightR[1].y)/2)) >= 0) return retVar;
 
-		if ((float)(cos((leftR[0].y + leftR[1].y)/2) * cos((rightR[0].y + rightR[1].y)/2)) >= 0) return retVar;
-
+		// pushing the end points of the line to _lines
 		_lines.push_back(Vec2f((leftR[0].x + leftR[1].x)/2, (leftR[0].y + leftR[1].y)/2));
 		_lines.push_back(Vec2f((rightR[0].x + rightR[1].x)/2, (rightR[0].y + rightR[1].y)/2));
 
@@ -139,26 +117,31 @@ vector<Vec2f> laneDetection::houghTransform(){
 }
 
 // Implementing RANSAC to remove outlier lines
+// Picking the best estimate having maximum number of inliers
 // TO DO: Better implementation 
 vector<Point2f> laneDetection::ransac(vector<Point2f> data){
 
 	vector<Point2f> res;
 	int maxInliers = 0;
 
+	// Picking up the first sample
 	for(int i = 0;i < data.size();i++){
 		Point2f p1 = data[i];
-
+	
+		// Picking up the second sample
 		for(int j = i + 1;j < data.size();j++){
 			Point2f p2 = data[j];
 			int n = 0;
 			
+			// Finding the total number of inliers
 			for (int k = 0;k < data.size();k++){
 				Point2f p3 = data[k];
 				float normalLength = norm(p2 - p1);
 				float distance = abs((float)((p3.x - p1.x) * (p2.y - p1.y) - (p3.y - p1.y) * (p2.x - p1.x)) / normalLength);
-				if (distance < 0.01) n++;
+				if (distance < _ransacThres) n++;
 			}
 			
+			// if the current selection has more inliers, update the result and maxInliers
 			if (n > maxInliers) {
 				res.clear();
 				maxInliers = n;			
@@ -173,23 +156,15 @@ vector<Point2f> laneDetection::ransac(vector<Point2f> data){
 	return res;
 }
 
-
-// Visualize
-void laneDetection::visualize(Mat imgRGB){
-	
-	namedWindow("LaneMarkings");
-	imshow("LaneMarkings",imgRGB);
-	waitKey(100);
-
-}
-
 // Draw Lines on the image
-Mat laneDetection::drawLines(Mat img, vector<Vec2f> lines){
+Mat laneDetection::drawLines(Mat img, vector<Vec2f> lines, string name){
 
 	Mat imgRGB;
-	cvtColor(img,imgRGB,CV_GRAY2RGB);
+	cvtColor(img,imgRGB,CV_GRAY2RGB); // converting the image to RGB for display
 	vector<Point> endPoints;
 
+	// Here, I convert the polar coordinates to Cartesian coordinates.
+	// Then, I extend the line to meet the boundary of the image.
 	for (int i = 0;i < lines.size();i++){
 		float r = lines[i][0];
 		float t = lines[i][1];
@@ -211,14 +186,23 @@ Mat laneDetection::drawLines(Mat img, vector<Vec2f> lines){
 		}
 
 	}
+
+	///// Finding the intersection point of two lines to plot only lane markings till the intersection
 	Point pint;
 	bool check = findIntersection(endPoints,pint);
 
 	if (check){
-		line(imgRGB,endPoints[0],pint,Scalar(0,0,255),2);
-		line(imgRGB,endPoints[2],pint,Scalar(0,0,255),2);
+		line(imgRGB,endPoints[0],pint,Scalar(0,255,255),5);
+		line(imgRGB,endPoints[2],pint,Scalar(0,255,255),5);
 	}	
-	visualize(imgRGB);
+	/////
+
+	// Saving to intercepts.csv
+	float xIntercept = min(endPoints[0].x,endPoints[2].x);
+	myfile << name << "," << xIntercept * 2 << "," << pint.x * 2 << endl;
+
+	visualize(imgRGB); // Visualize the final result
+
 	return imgRGB;
 }
 
@@ -230,7 +214,7 @@ bool laneDetection::findIntersection(vector<Point> endP, Point& pi){
 	Point d2 = endP[3] - endP[2];
 	
 	float cross = d1.x*d2.y - d1.y*d2.x;
-	if (abs(cross) < 1e-8)
+	if (abs(cross) < 1e-8) // No intersection
         return false;
 
     double t1 = (x.x * d2.y - x.y * d2.x)/cross;
@@ -240,49 +224,68 @@ bool laneDetection::findIntersection(vector<Point> endP, Point& pi){
 
 }
 
+// Visualize
+void laneDetection::visualize(Mat imgRGB){
+	
+	namedWindow("LaneMarkings");
+	imshow("LaneMarkings",imgRGB);
+	waitKey(100);
+
+}
+
 #ifdef LaneTest
 int main()
 {
-	laneDetection detect; // Make the object
-	
-	int i = 1;
-	char ipname[10], opname[10];
-	
-	sprintf(ipname,"./images/mono%d.png",i);
-	Mat img1 = imread(ipname,0); // Read the image
+	laneDetection detect; // object of laneDetection class
+
+	string ippath = "./images/";
+	string oppath = "./output/";
+	string imname;
+	ifstream imageNames ("imNames.txt");
+	getline(imageNames,imname);
+    
+	ippath += imname;
+	Mat img1 = imread(ippath,0); // Read the image
 	resize(img1,img1,Size(detect._width,detect._height));
+	
 	detect.LMFiltering(img1); // Filtering to detect Lane Markings
 	vector<Vec2f> lines = detect.houghTransform(); // Hough Transform
-	Mat imgFinal = detect.drawLines(img1, lines);
-	i++;
+	Mat imgFinal = detect.drawLines(img1, lines, imname); // draw final Lane Markings on the original image for display
 	
-	sprintf(ipname,"./output/mono%d.png",i - 1);
-	imwrite(ipname,imgFinal); 
-	while(i <= 674){
-		
-		sprintf(ipname,"./images/mono%d.png",i);
-		Mat img2 = imread(ipname,0); // Read the image
+	oppath += imname;
+	imwrite(oppath,imgFinal); 
+
+	while ( getline (imageNames,imname) ){
+		ippath = "./images/";
+		oppath = "./output/";
+		ippath += imname;
+
+		Mat img2 = imread(ippath,0); // Read the image
 		resize(img2,img2,Size(detect._width,detect._height));
-		i++;
+		
 		detect.LMFiltering(img2); // Filtering to detect Lane Markings
 		vector<Vec2f> lines2 = detect.houghTransform(); // Hough Transform
+		
+		
+		// if lanes are not detected, then use the Kalman Filter prediction
 		if (lines2.size() < 2) {
-			imgFinal = detect.drawLines(img2,lines);
-			sprintf(opname,"./output/mono%d.png",i - 1);
-			imwrite(opname,imgFinal); 
+			imgFinal = detect.drawLines(img2,lines, imname); // draw final Lane Markings on the original image for display
+			oppath += imname;
+			imwrite(oppath,imgFinal); 
 			continue;
 		}
 		
+		///// Kalman Filter to predict the next state
 		CKalmanFilter KF2(lines);
 		vector<Vec2f> pp = KF2.predict();
 
 		vector<Vec2f> lines2Final = KF2.update(lines2);
 		lines = lines2Final;
-		imgFinal = detect.drawLines(img2,lines);
+		imgFinal = detect.drawLines(img2,lines2, imname); // draw final Lane Markings on the original image for display
+		/////
 		
-		sprintf(opname,"./output/mono%d.png",i - 1);
-		imwrite(opname,imgFinal);
-
+		oppath += imname;
+		imwrite(oppath,imgFinal);
 	}
 	
 

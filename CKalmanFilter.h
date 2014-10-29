@@ -14,11 +14,10 @@ class CKalmanFilter
 public:
 	CKalmanFilter(vector<Vec2f>);
 	~CKalmanFilter();
-	KalmanFilter* kalman;
-	double deltaTime;
-	vector<Vec2f> prevResult;
-
 	vector<Vec2f> predict();
 	vector<Vec2f> update(vector<Vec2f>);
+
+	KalmanFilter* kalman;
+	vector<Vec2f> prevResult;
 
 };
